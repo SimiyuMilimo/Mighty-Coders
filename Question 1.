@@ -1,0 +1,140 @@
+import pandas as pd
+from collections import Counter
+import csv
+import spacy
+from transformers import AutoTokenizer, AutoModelForTokenClassification, pipeline
+
+# Load the SpaCy model for NER
+def load_spacy_model():
+    nlp = spacy.load('en_core_sci_sm')
+    nlp.max_length = 1500000  # Adjust as needed
+    return nlp
+
+# Load the BioBERT model for NER
+def load_biobert_model():
+    # Load BioBERT tokenizer and model
+    tokenizer = AutoTokenizer.from_pretrained('dmis-lab/biobert-base-cased-v1.1', force_download=True)
+    model = AutoModelForTokenClassification.from_pretrained('dmis-lab/biobert-base-cased-v1.1', force_download=True)
+    
+    # Create an NER pipeline with BioBERT without using the truncation argument
+    nlp = pipeline("ner", model=model, tokenizer=tokenizer, aggregation_strategy="simple")
+    return nlp
+
+# Task 1: Extract text from all CSV files and save to a single .txt file
+def task1_extract_text_csv_txt(input_csv, output_txt):
+    dataset_text = []
+    for csv_file_location in input_csv:
+        # Read each CSV file into a DataFrame
+        dataset_df = pd.read_csv(csv_file_location)
+        # Find the column that contains 'text'
+        text_column = dataset_df.columns[dataset_df.columns.str.contains('text', case=False, regex=True)]
+        if not text_column.empty:
+            # Extract non-null text data and add to the list
+            text_data = dataset_df[text_column[0]].dropna().tolist()
+            dataset_text.extend(text_data)
+    # Write all extracted text to a .txt file
+    with open(output_txt, 'w', encoding='utf-8') as f:
+        f.write("\n".join(dataset_text))
+    print(f"Text extraction completed. File saved at: {output_txt}")
+
+# Task 2.1: Count word occurrences and save the top 30 most common words to a CSV file
+def task2_top_30_common_words(output, csv_save_location, top_n=30):
+    with open(output, 'r', encoding='utf-8') as file:
+        # Read the entire text file
+        text_input = file.read()
+    # Split text into words and count occurrences
+    words = text_input.split()
+    words_count = Counter(words)
+    # Get the top 30 most common words
+    top_30_common_words = words_count.most_common(top_n)
+    # Write the top 30 words and their counts to a CSV file
+    with open(csv_save_location, 'w', newline='', encoding='utf-8') as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(["Word", "Count"])  # Header
+        writer.writerows(top_30_common_words)
+    print(f"Top {top_n} common words saved to {csv_save_location}")
+# Task 3.2: Count unique tokens using AutoTokenizer and save top 30 to CSV
+def task3_top_30_unique_tokens(output_txt, csv_save_location, top_n=30):
+    # Load the BioBERT tokenizer
+    tokenizer = AutoTokenizer.from_pretrained('dmis-lab/biobert-base-cased-v1.1', force_download=True)
+    
+    with open(output_txt, 'r', encoding='utf-8') as file:
+        text_input = file.read()
+
+    # Tokenize the text
+    tokens = tokenizer.tokenize(text_input)
+    
+    # Count occurrences of tokens
+    token_count = Counter(tokens)
+    
+    # Get the top 30 unique tokens
+    top_30_tokens = token_count.most_common(top_n)
+
+    # Write the top 30 tokens to a CSV file
+    with open(csv_save_location, 'w', newline='', encoding='utf-8') as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(["Token", "Count"])  # Header
+        writer.writerows(top_30_tokens)
+    
+    print(f"Top {top_n} unique tokens saved to {csv_save_location}")
+# Task 4: Perform Named-Entity Recognition (NER) using SpaCy and BioBERT, and compare results
+def task4_ner_comparison(output_txt, csv_save_location_spacy, csv_save_location_biobert):
+    spacy_nlp = load_spacy_model()
+    biobert_nlp = load_biobert_model()
+
+    with open(output_txt, 'r', encoding='utf-8') as file:
+        # Read the entire text file
+        text_input = file.read()
+
+    # Split text into smaller chunks 
+    chunk_size = 512  # 512 is the max token size for many BERT models
+    text_chunks = [text_input[i:i + chunk_size] for i in range(0, len(text_input), chunk_size)]
+
+    spacy_entities = []
+    biobert_entities = []
+
+    # Process each chunk separately
+    for chunk in text_chunks:
+        # Perform NER with SpaCy
+        doc = spacy_nlp(chunk)
+        spacy_entities += [ent.text for ent in doc.ents if ent.label_ in ["Disease", "Drug"]]
+
+        # Perform NER with BioBERT
+        biobert_results = biobert_nlp(chunk)
+
+        # Extract entities from BioBERT results
+        biobert_entities += [ent['word'] for ent in biobert_results if ent['entity_group'].startswith('B-')]
+
+        # Stop processing if 500 entities are collected
+        if len(spacy_entities) >= 500 and len(biobert_entities) >= 500:
+            break
+
+    # Limit entities to 500 entries
+    spacy_entities = spacy_entities[:500]
+    biobert_entities = biobert_entities[:500]
+
+    # Count occurrences of entities
+    spacy_counter = Counter(spacy_entities)
+    biobert_counter = Counter(biobert_entities)
+
+    # Save SpaCy entities to a CSV file
+    with open(csv_save_location_spacy, 'w', newline='', encoding='utf-8') as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(["Entity", "Count"])  # Header
+        writer.writerows(spacy_counter.items())
+    
+    # Save BioBERT entities to a CSV file
+    with open(csv_save_location_biobert, 'w', newline='', encoding='utf-8') as csv_file:
+        writer = csv.writer(csv_file)
+        writer.writerow(["Entity", "Count"])  # Header
+        writer.writerows(biobert_counter.items())
+
+    print(f"Entities extracted and saved:\n - SpaCy: {csv_save_location_spacy}\n - BioBERT: {csv_save_location_biobert}")
+
+# Testing the code
+output_txt = 'output.txt'
+csv_save_location_spacy = 'spacy_entities.csv'
+csv_save_location_biobert = 'biobert_entities.csv'
+
+# Run NER comparison
+task4_ner_comparison(output_txt, csv_save_location_spacy, csv_save_location_biobert)
